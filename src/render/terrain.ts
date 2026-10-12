@@ -1,6 +1,6 @@
 // WHAT THIS FILE DOES
-// Turns the terrain heights into a 3D ground mesh. Colours come from the height and steepness
-// (grass, dirt, rock, snow), so there are no texture files and it works offline.
+// Draws the terrain as flat-shaded low-poly chunks (colours from slope and height, no textures),
+// plus the river water. Chunks are built once; a terrain edit only rebuilds the chunks it touched.
 import type { Scene } from '@babylonjs/core/scene'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
@@ -9,131 +9,114 @@ import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
-import { smoothstep } from '../sim/noise'
 import type { Terrain } from '../sim/terrain'
 import type { EditBounds } from '../sim/terrainEdit'
+import { CHUNK, chunkCells, chunksPerSide, fillChunk } from './chunkData'
 
-const GRASS = [0.34, 0.6, 0.27]
-const DIRT = [0.45, 0.37, 0.25]
-const ROCK = [0.52, 0.52, 0.55]
-const SNOW = [0.93, 0.94, 0.97]
+const chunks = new Map<string, Mesh>()
 
-const mix = (a: number[], b: number[], t: number) => a.map((v, i) => v + (b[i] - v) * t)
-
-// Colour of one ground corner: grass, dirt, rock or snow by height and steepness.
-function cornerColor(t: Terrain, i: number, j: number): number[] {
-  const size = t.size
-  const s = size + 1
-  const h = t.heights[j * s + i]
-  // steepness from the neighbouring corners
-  const hx = t.heights[j * s + Math.min(i + 1, size)] - t.heights[j * s + Math.max(i - 1, 0)]
-  const hz = t.heights[Math.min(j + 1, size) * s + i] - t.heights[Math.max(j - 1, 0) * s + i]
-  const slope = Math.hypot(hx, hz) / 2
-
-  // a little per-corner variation so the grass isn't one flat colour
-  const wobble = 0.93 + (0.14 * (((i * 73856093) ^ (j * 19349663)) % 100)) / 100
-  let c = mix(GRASS, DIRT, 1 - smoothstep(-4.5, -1, h))
-  c = mix(c, ROCK, Math.max(smoothstep(0.45, 0.8, slope), smoothstep(13, 17, h)))
-  c = mix(c, SNOW, smoothstep(20, 23, h))
-  return [c[0] * wobble, c[1] * wobble, c[2] * wobble]
+/** After the terrain heights change, rebuild only the chunks that touch the changed corners. */
+export function syncTerrainMesh(_scene: Scene, t: Terrain, b: EditBounds) {
+  const last = chunksPerSide(t) - 1
+  const c0 = Math.max(0, Math.floor((b.i0 - 1) / CHUNK))
+  const c1 = Math.min(last, Math.floor(b.i1 / CHUNK))
+  const r0 = Math.max(0, Math.floor((b.j0 - 1) / CHUNK))
+  const r1 = Math.min(last, Math.floor(b.j1 / CHUNK))
+  for (let cj = r0; cj <= r1; cj++) {
+    for (let ci = c0; ci <= c1; ci++) {
+      const mesh = chunks.get(`${ci}_${cj}`)
+      if (!mesh) continue
+      const { nx, nz } = chunkCells(t, ci, cj)
+      const n = nx * nz * 6 * 3
+      const pos = new Float32Array(n)
+      const nor = new Float32Array(n)
+      const col = new Float32Array(nx * nz * 6 * 4)
+      fillChunk(t, ci, cj, pos, nor, col)
+      mesh.updateVerticesData(VertexBuffer.PositionKind, pos)
+      mesh.updateVerticesData(VertexBuffer.NormalKind, nor)
+      mesh.updateVerticesData(VertexBuffer.ColorKind, col)
+      mesh.refreshBoundingInfo()
+    }
+  }
 }
 
-/**
- * After the terrain heights change, update the 3D ground to match: positions, colours and
- * normals, so lighting and slope colours stay correct. Bounds are corner indices.
- */
-export function syncTerrainMesh(scene: Scene, t: Terrain, b: EditBounds) {
-  const mesh = scene.getMeshByName('terrain') as Mesh | null
-  if (!mesh) return
-  const size = t.size
-  const s = size + 1
-  const half = size / 2
-  const positions = mesh.getVerticesData(VertexBuffer.PositionKind)
-  const colors = mesh.getVerticesData(VertexBuffer.ColorKind)
-  const normals = mesh.getVerticesData(VertexBuffer.NormalKind)
-  const indices = mesh.getIndices()
-  if (!positions || !colors || !normals || !indices) return
-
-  // colours depend on the neighbours too, so refresh one corner further out
-  for (let j = Math.max(0, b.j0 - 1); j <= Math.min(size, b.j1 + 1); j++) {
-    for (let i = Math.max(0, b.i0 - 1); i <= Math.min(size, b.i1 + 1); i++) {
-      const k = j * s + i
-      positions[k * 3] = i - half
-      positions[k * 3 + 1] = t.heights[k]
-      positions[k * 3 + 2] = j - half
-      const c = cornerColor(t, i, j)
-      colors[k * 4] = c[0]
-      colors[k * 4 + 1] = c[1]
-      colors[k * 4 + 2] = c[2]
+function createWater(scene: Scene, t: Terrain) {
+  const r = t.river
+  if (!r) return
+  const pos: number[] = []
+  const nor: number[] = []
+  const idx: number[] = []
+  const n = r.x.length
+  for (let k = 0; k < n; k++) {
+    const a = Math.max(0, k - 1)
+    const b = Math.min(n - 1, k + 1)
+    let tx = r.x[b] - r.x[a]
+    let tz = r.z[b] - r.z[a]
+    const len = Math.hypot(tx, tz) || 1
+    tx /= len
+    tz /= len
+    const px = -tz
+    const pz = tx // sideways
+    pos.push(r.x[k] + px * r.half[k], r.y[k], r.z[k] + pz * r.half[k])
+    pos.push(r.x[k] - px * r.half[k], r.y[k], r.z[k] - pz * r.half[k])
+    nor.push(0, 1, 0, 0, 1, 0)
+    if (k < n - 1) {
+      const i = k * 2
+      idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2)
     }
   }
-  VertexData.ComputeNormals(positions, indices, normals)
-  mesh.updateVerticesData(VertexBuffer.PositionKind, positions)
-  mesh.updateVerticesData(VertexBuffer.ColorKind, colors)
-  mesh.updateVerticesData(VertexBuffer.NormalKind, normals)
-  mesh.refreshBoundingInfo()
+  const mesh = new Mesh('water', scene)
+  const vd = new VertexData()
+  vd.positions = pos
+  vd.normals = nor
+  vd.indices = idx
+  vd.applyToMesh(mesh)
+  const mat = new StandardMaterial('waterMat', scene)
+  mat.diffuseColor = new Color3(0.2, 0.5, 0.78)
+  mat.emissiveColor = new Color3(0.05, 0.16, 0.26)
+  mat.specularColor = new Color3(0.5, 0.5, 0.5)
+  mat.specularPower = 48
+  mat.alpha = 0.82
+  mat.backFaceCulling = false
+  mat.freeze()
+  mesh.material = mat
+  mesh.isPickable = false
+  mesh.freezeWorldMatrix()
 }
 
-export function createTerrainMesh(scene: Scene, t: Terrain): Mesh {
-  const size = t.size
-  const s = size + 1
-  const half = size / 2
-  const positions = new Float32Array(s * s * 3)
-  const colors = new Float32Array(s * s * 4)
-
-  for (let j = 0; j < s; j++) {
-    for (let i = 0; i < s; i++) {
-      const k = j * s + i
-      const h = t.heights[k]
-      positions[k * 3] = i - half
-      positions[k * 3 + 1] = h
-      positions[k * 3 + 2] = j - half
-
-      const c = cornerColor(t, i, j)
-      colors[k * 4] = c[0]
-      colors[k * 4 + 1] = c[1]
-      colors[k * 4 + 2] = c[2]
-      colors[k * 4 + 3] = 1
-    }
-  }
-
-  const indices = new Uint32Array(size * size * 6)
-  let n = 0
-  for (let j = 0; j < size; j++) {
-    for (let i = 0; i < size; i++) {
-      const a = j * s + i
-      const b = a + 1
-      const c = a + s
-      const d = c + 1
-      indices[n++] = a
-      indices[n++] = b
-      indices[n++] = c
-      indices[n++] = b
-      indices[n++] = d
-      indices[n++] = c
-    }
-  }
-
-  const normals = new Float32Array(positions.length)
-  VertexData.ComputeNormals(positions, indices, normals)
-
-  const mesh = new Mesh('terrain', scene)
-  const data = new VertexData()
-  data.positions = positions
-  data.indices = indices
-  data.normals = normals
-  data.colors = colors
-  data.applyToMesh(mesh)
-
+export function createTerrainMesh(scene: Scene, t: Terrain) {
+  chunks.clear()
   const mat = new StandardMaterial('terrainMat', scene)
   mat.specularColor = Color3.Black()
-  mesh.material = mat
-  mesh.isPickable = false // placement uses its own ground ray (sim/terrain.ts)
+  mat.freeze()
+  const side = chunksPerSide(t)
+  const fullIndices = Uint32Array.from({ length: CHUNK * CHUNK * 6 }, (_, i) => i) // un-shared = flat shading
+
+  for (let cj = 0; cj < side; cj++) {
+    for (let ci = 0; ci < side; ci++) {
+      const { nx, nz } = chunkCells(t, ci, cj)
+      const verts = nx * nz * 6
+      const pos = new Float32Array(verts * 3)
+      const nor = new Float32Array(verts * 3)
+      const col = new Float32Array(verts * 4)
+      fillChunk(t, ci, cj, pos, nor, col)
+      const mesh = new Mesh(`terrain_${ci}_${cj}`, scene)
+      const vd = new VertexData()
+      vd.positions = pos
+      vd.normals = nor
+      vd.colors = col
+      vd.indices = fullIndices.subarray(0, verts)
+      vd.applyToMesh(mesh, true) // updatable: terraforming rewrites it
+      mesh.material = mat
+      mesh.isPickable = false // placement uses its own ground ray (sim/terrain.ts)
+      mesh.freezeWorldMatrix()
+      chunks.set(`${ci}_${cj}`, mesh)
+    }
+  }
+  createWater(scene, t)
 
   // a sun from the side makes hills readable; turn the all-over light down a little to match
   const sun = new DirectionalLight('terrainSun', new Vector3(-0.5, -1, -0.4), scene)
   sun.intensity = 0.55
   for (const l of scene.lights) if (l.getClassName() === 'HemisphericLight') l.intensity = 0.65
-
-  return mesh
 }

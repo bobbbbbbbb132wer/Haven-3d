@@ -5,6 +5,7 @@
 //   Mouse wheel = zoom in / out
 //   Right-drag  = orbit and tilt
 //   Shift       = move faster
+import { START } from '../sim/worldgen'
 import { FreeCamera } from '@babylonjs/core/Cameras/freeCamera'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import type { Scene } from '@babylonjs/core/scene'
@@ -22,9 +23,9 @@ export function createRtsCamera(scene: Scene, canvas: HTMLCanvasElement) {
 
   // "goal" is where we want the camera to be. "now" is what you see (it glides to the goal).
   const goal = {
-    x: 0,
+    x: START.x,
     y: 0,
-    z: 0,
+    z: START.z,
     yaw: 0,
     pitch: CONFIG.cameraStartPitch,
     zoom: CONFIG.cameraStartZoom,

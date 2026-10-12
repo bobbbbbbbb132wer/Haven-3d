@@ -112,7 +112,7 @@ export function planFoundation(
   }
   for (let j = j0; j < j0 + r.d; j++) {
     for (let i = i0; i < i0 + r.w; i++) {
-      if (t.blocked[j * t.size + i]) return fail(t, r, mode, 'Something is in the way (tree, rock or showroom)')
+      if (t.blocked[j * t.size + i]) return fail(t, r, mode, 'Something is in the way')
     }
   }
 

@@ -1,42 +1,13 @@
 // WHAT THIS FILE DOES
-// Makes ONE small terrain test chunk (SAMPLE.n x SAMPLE.n metres) from a fixed seed:
-// flat colony plains + gentle hills + warped ridged mountain ranges + Voronoi regions +
-// erosion-style valleys + a river that snakes between the ridges.
-// Pure numbers, no 3D. It runs once at start-up and is never regenerated per frame.
+// Generates the playable world (fixed seed) as a Terrain: flat colony plains + gentle hills +
+// domain-warped ridged mountain ranges + Voronoi regions + erosion-style valleys + a river that
+// snakes between the ridges. Pure numbers, no 3D. Runs once at start-up, never per frame.
+// No trees, rocks or other decorations are generated here.
 import { fbm, makeNoise2D, smoothstep } from './noise'
+import { MAX_TILE_STEP, WORLD_SIZE, type Terrain } from './terrain'
 
-export const SAMPLE = {
-  seed: 20260,
-  /** Cells per side (1 cell = 1 metre). */
-  n: 128,
-  /** Where the chunk sits in the showroom world (east of the build pad). */
-  cx: 112,
-  cz: 0,
-  /** Height the Z-inspect camera looks at. */
-  focusY: 8,
-  /** Bottom of the display block under the terrain. */
-  skirtY: -7,
-}
-
-export interface SampleRiver {
-  /** Local x,z (metres from the chunk centre), water height and half-width for each metre of z. */
-  x: Float32Array
-  z: Float32Array
-  y: Float32Array
-  half: Float32Array
-}
-
-export interface Sample {
-  n: number
-  /** (n+1)*(n+1) heights, row = z, column = x. */
-  heights: Float32Array
-  /** 0..1 grass variety from the Voronoi regions (0 lush, 1 dry). */
-  tint: Float32Array
-  /** 0..1 how close to the river bank (for sandy dirt). */
-  bank: Float32Array
-  river: SampleRiver
-  stats: { min: number; max: number; ms: number }
-}
+/** Where the colony starts: a broad, flat meadow. The camera starts here too. */
+export const START = { x: -34, z: 40 }
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v))
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t
@@ -82,9 +53,9 @@ const smin = (a: number, b: number, k: number) => {
   return Math.min(a, b) - (h * h) / (4 * k)
 }
 
-export function generateSample(seed: number = SAMPLE.seed): Sample {
+export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now()
-  const N = SAMPLE.n
+  const N = size
   const S = N + 1
   const H = N / 2
 
@@ -99,7 +70,7 @@ export function generateSample(seed: number = SAMPLE.seed): Sample {
 
   /** Centre line of the river (x for a given z): two sine waves plus a little noise. */
   const riverX = (z: number) =>
-    clamp(-4 + 15 * Math.sin(z * 0.062 + 0.9) + 8 * Math.sin(z * 0.145 + 2.1) + 6 * nRiver(z * 0.03, 0.5), -50, 50)
+    clamp(-4 + 15 * Math.sin(z * 0.062 + 0.9) + 8 * Math.sin(z * 0.145 + 2.1) + 6 * nRiver(z * 0.03, 0.5), -0.4 * H, 0.4 * H)
 
   const h = new Float32Array(S * S)
   const mask = new Float32Array(S * S) // how mountainous (0 plains .. 1 mountains)
@@ -152,8 +123,8 @@ export function generateSample(seed: number = SAMPLE.seed): Sample {
       let height = (plain + hill) * (1 - 0.8 * mk) + mountain + crag
 
       // a broad, almost flat meadow in the south-west for colony building
-      const d = Math.hypot(x + 30, z - 34)
-      const flat = smoothstep(30, 14, d)
+      const d = Math.hypot(x - START.x, z - START.z)
+      const flat = smoothstep(46, 22, d)
       height = lerp(height, 0.5 + 0.12 * nDetail(x * 0.06, z * 0.06), flat)
       h[k] = height
     }
@@ -237,6 +208,7 @@ export function generateSample(seed: number = SAMPLE.seed): Sample {
   for (let k = 0; k < S; k++) bedY[k] = bed[k] - (1.0 + 0.9 * (k / N))
 
   const bank = new Float32Array(S * S)
+  const water = new Uint8Array(S * S) // 1 = under the river
   for (let j = 0; j < S; j++) {
     for (let i = 0; i < S; i++) {
       const x = i - H
@@ -254,22 +226,29 @@ export function generateSample(seed: number = SAMPLE.seed): Sample {
       const wall = bedY[bk] + 0.45 * Math.max(0, best - halfW[bk]) + 1.6 * nDetail(x * 0.07, z * 0.07) * smoothstep(3, 12, best)
       h[k] = smin(h[k], wall, 2.2)
       bank[k] = 1 - smoothstep(halfW[bk] + 0.3, halfW[bk] + 3.4, best)
+      water[k] = best <= halfW[bk] + 1.1 ? 1 : 0
     }
   }
 
-  const river: SampleRiver = {
+  const river = {
     x: rx,
     z: rz,
     y: Float32Array.from(bedY, (b) => b + 0.55),
     half: Float32Array.from(halfW, (w) => w + 1.1),
   }
 
-  let min = 1e9
-  let max = -1e9
-  for (let k = 0; k < S * S; k++) {
-    if (h[k] < min) min = h[k]
-    if (h[k] > max) max = h[k]
+  // a tile can be built on if it is flat enough and none of its corners are under the river
+  const buildable = new Uint8Array(N * N)
+  for (let j = 0; j < N; j++) {
+    for (let i = 0; i < N; i++) {
+      const k = j * S + i
+      const c = [h[k], h[k + 1], h[k + S], h[k + S + 1]]
+      const wet = water[k] || water[k + 1] || water[k + S] || water[k + S + 1]
+      buildable[j * N + i] = !wet && Math.max(...c) - Math.min(...c) <= MAX_TILE_STEP ? 1 : 0
+    }
   }
-  const t1 = typeof performance !== 'undefined' ? performance.now() : Date.now()
-  return { n: N, heights: h, tint, bank, river, stats: { min, max, ms: t1 - t0 } }
+
+  const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0
+  console.log(`world generated: ${N}x${N} in ${ms.toFixed(0)} ms`)
+  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, river }
 }

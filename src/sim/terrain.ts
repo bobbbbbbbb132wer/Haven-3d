@@ -6,7 +6,7 @@
 // trees are 4-9 tall. Heights go roughly from -6 (valleys) to +30 (mountain tops).
 import { fbm, makeNoise2D, smoothstep } from './noise'
 
-export const WORLD_SIZE = 128 // tiles per side. 96 = lighter, 192 or 256 = bigger
+export const WORLD_SIZE = 192 // tiles per side. 128 = lighter, 256 = bigger
 export const START_FLAT = 14 // radius of the guaranteed flat start area (around 0,0)
 export const START_BLEND = 34 // flat area fades into hills by this radius
 export const MAX_TILE_STEP = 0.55 // a tile steeper than this (height difference) can't be built on
@@ -33,6 +33,12 @@ export interface Terrain {
   /** 1 = a tree, bush, stone or stump is on this tile. */
   blocked: Uint8Array
   scenery: SceneryItem[]
+  /** Optional extras from sim/worldgen.ts (one value per grid corner): grass variety, river-bank closeness, 1 = under the river. */
+  tint?: Float32Array
+  bank?: Float32Array
+  water?: Uint8Array
+  /** The river's centre line, one entry per metre of z: x, z, water height and half-width. */
+  river?: { x: Float32Array; z: Float32Array; y: Float32Array; half: Float32Array }
 }
 
 /** A rectangle on the ground: centre x/z and size in tiles. */

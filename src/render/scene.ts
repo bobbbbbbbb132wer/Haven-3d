@@ -1,16 +1,15 @@
 // WHAT THIS FILE DOES
-// Creates the 3D window: engine, scene, light, cameras, a small flat test pad and the showroom.
+// Creates the 3D window: engine, scene, light, cameras and the generated terrain.
+// Only terrain is generated: no trees, rocks, buildings or other decorations.
 import { Engine } from '@babylonjs/core/Engines/engine'
 import { Scene } from '@babylonjs/core/scene'
 import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight'
 import { Color4 } from '@babylonjs/core/Maths/math.color'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import { createCameras } from './camera'
-import { CONFIG } from '../config'
-import { generateTerrain, setTerrain } from '../sim/terrain'
+import { WORLD_SIZE, setTerrain } from '../sim/terrain'
+import { generateWorld } from '../sim/worldgen'
 import { createTerrainMesh } from './terrain'
-import { spawnShowroom } from './showroom'
-import { spawnTerrainSample } from './terrainSample'
 
 export interface View {
   engine: Engine
@@ -31,16 +30,10 @@ export async function createScene(container: HTMLElement): Promise<View> {
   new HemisphericLight('sun', new Vector3(0.3, 1, 0.2), scene)
 
   const cameras = createCameras(scene, canvas)
-  // Small flat test pad: build on the south part, models are on show along the north edge.
-  const terrain = generateTerrain(1337, CONFIG.flatSize, true)
+  // Fixed seed: the same world every time.
+  const terrain = generateWorld(1337, WORLD_SIZE)
   setTerrain(terrain)
   createTerrainMesh(scene, terrain)
-  spawnShowroom(scene, terrain).catch((error) => console.error('Showroom failed:', error))
-  try {
-    spawnTerrainSample(scene) // east of the pad; press Z to inspect it
-  } catch (error) {
-    console.error('Terrain sample failed:', error)
-  }
 
   window.addEventListener('resize', () => engine.resize())
   return { engine, scene, cameras }
