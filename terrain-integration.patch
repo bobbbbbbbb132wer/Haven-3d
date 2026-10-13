@@ -1,0 +1,623 @@
+diff -ruN a/src/config.ts b/src/config.ts
+--- a/src/config.ts	2026-10-13 02:07:39.872195020 +0000
++++ b/src/config.ts	2026-10-13 02:07:39.960818312 +0000
+@@ -67,3 +67,34 @@
+   embersPerSecond: 18,
+   smokePerSecond: 6,
+ }
++
++/**
++ * Modular Terrain Pack placement (see sim/terrainKit.ts). All sizes are in metres / tiles.
++ * Turn a family off by setting its count or chance to 0.
++ */
++export const TERRAIN_KIT = {
++  /** Nothing from the pack is placed this close to the colony start (keeps the meadow clean). */
++  clearRadius: 24,
++  /** Beach: how far inland of the water's edge the flat sand shelf reaches, and how high it sits above the water. */
++  beachShelfWidth: 2,
++  beachShelfHeight: 0.12,
++  /** Cliffs: a cell is a cliff face when its ground rises this much per metre (1 = 45 degrees). */
++  cliffGrade: 1.15,
++  /** Cliff ledges are laid where the ground crosses a multiple of this height (metres). */
++  cliffBandHeight: 4,
++  /** Above this height cliff ledges stay bare rock (no grass lip on the top piece). */
++  cliffRockLine: 14,
++  /** A ledge needs at least this many neighbours in a straight line, so there are no lone slabs. */
++  cliffMinRun: 4,
++  /** Tallest cliff stack (pieces, one metre each). */
++  cliffMaxStack: 4,
++  /** Grass slope strips: laid where the ground is already within this many metres of the strip's shape (it is then eased to match exactly). */
++  slopeFitTolerance: 0.3,
++  slopeMinWidth: 3,
++  slopeMaxWidth: 10,
++  /** Rocks: chance per eligible tile. */
++  rockChanceSteep: 0.05,
++  rockChanceBank: 0.06,
++  rockChanceMeadow: 0.0035,
++  rockChanceCliffFoot: 0.1,
++}
+diff -ruN a/src/render/pieceMatrix.ts b/src/render/pieceMatrix.ts
+--- a/src/render/pieceMatrix.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/render/pieceMatrix.ts	2026-10-13 02:07:39.967821120 +0000
+@@ -0,0 +1,18 @@
++// WHAT THIS FILE DOES
++// The one bit of maths behind placing a terrain piece: turns a piece's position / turn / size into
++// the matrix a thin instance needs. Kept on its own (no model loading) so it can be tested alone.
++import { Axis } from '@babylonjs/core/Maths/math.axis'
++import { Matrix, Quaternion, Vector3 } from '@babylonjs/core/Maths/math.vector'
++import type { TerrainPiece } from '../sim/terrain'
++
++/** The thin-instance matrix that puts a model's sub-mesh where `p` says, as a world-space placement. */
++export function pieceMatrix(world: Matrix, worldInverse: Matrix, p: TerrainPiece): Matrix {
++  const place = Matrix.Compose(
++    new Vector3(p.scale, p.scale * p.scaleY, p.scale),
++    Quaternion.RotationAxis(Axis.Y, p.yaw),
++    new Vector3(p.x, p.y, p.z),
++  )
++  // Thin instances are applied BEFORE the mesh's own world matrix. The glTF importer puts a mirror
++  // on the model's root, so wrap the placement in it: (mesh -> world) then place, expressed locally.
++  return world.multiply(place).multiply(worldInverse)
++}
+diff -ruN a/src/render/showroom.ts b/src/render/showroom.ts
+--- a/src/render/showroom.ts	2026-10-13 02:07:39.878175644 +0000
++++ b/src/render/showroom.ts	2026-10-13 02:07:39.966592681 +0000
+@@ -1,7 +1,9 @@
+ // WHAT THIS FILE DOES
+-// The showroom: a flat grid beside the world (not connected to it). Every model in
+-// src/assets/models (the campfire plus the whole Modular Terrain Pack) stands on a pedestal at
+-// its real size, grouped by kind, one group per row, spinning slowly. Name labels only appear
++// The showroom: a flat grid beside the world (not connected to it). The campfire plus the terrain
++// models of the Modular Terrain Pack (grass, hills, paths, water, beach, cliff, escarpment, shared
++// dirt, mountains and rocks) each stand on a pedestal at their real size, grouped by kind, one
++// group per row, spinning slowly. Cave interiors, trees, bridges, docks, fences and other props
++// are left out: this stage is terrain only. Name labels only appear
+ // for pedestals near the camera. A tilted status board on the ground shows the day, time of day,
+ // resources and other stats live. Press X to fly the camera there, X again to go back.
+ import type { Scene } from '@babylonjs/core/scene'
+@@ -29,11 +31,17 @@
+ const MAX_FIT = 3.6 // models wider than this are shrunk to fit their pedestal
+ const BOARD = { w: 32, h: 16, z: 40, y: 3, tilt: 0.35 }
+ const GROUP_ORDER = [
+-  'campfire', 'Hilly_Terrain', 'Mountain', 'Shared_Terrain', 'Hilly_Prop', 'Shared_Prop',
+-  'Beach_Terrain', 'Beach_Prop', 'Cliff_Terrain', 'Cliff_Prop', 'Escarpment_Terrain',
+-  'Cave_Terrain', 'Cave_Cliff', 'Cave_Prop',
++  'campfire', 'Hilly_Terrain', 'Beach_Terrain', 'Cliff_Terrain', 'Escarpment_Terrain',
++  'Shared_Terrain', 'Mountain', 'Cliff_Prop', 'Shared_Prop', 'Hilly_Prop',
+ ]
+ 
++/** What the showroom displays: the campfire, every terrain piece, the mountains and the rocks. */
++const isShowroomModel = (n: string) =>
++  n === 'campfire' ||
++  /^(Hilly|Beach|Cliff|Escarpment|Shared)_Terrain_/.test(n) ||
++  /^Mountain_\d/.test(n) ||
++  /^(Shared_Prop_Boulder|Cliff_Prop_Rock|Hilly_Prop_Rock)_\d/.test(n)
++
+ const groupOf = (n: string) =>
+   n === 'campfire' ? 'campfire'
+   : n.startsWith('Mountain') ? 'Mountain'
+@@ -158,7 +166,7 @@
+   })
+ 
+   // ---- the models ----
+-  const slots = layout(Object.keys(models))
++  const slots = layout(Object.keys(models).filter(isShowroomModel))
+   const ui = AdvancedDynamicTexture.CreateFullscreenUI('showroomLabels', true, scene)
+   const spinners: TransformNode[] = []
+   const labels: { label: Rectangle; holder: TransformNode; shown: boolean }[] = []
+diff -ruN a/src/render/terrain.ts b/src/render/terrain.ts
+--- a/src/render/terrain.ts	2026-10-13 02:07:39.878632665 +0000
++++ b/src/render/terrain.ts	2026-10-13 02:07:39.967147692 +0000
+@@ -1,6 +1,7 @@
+ // WHAT THIS FILE DOES
+ // Draws the terrain as flat-shaded low-poly chunks (colours from slope and height, no textures),
+-// the river's water surface, and the pack's Mountain models crowning the highest ridges.
++// the river's water surface, the pack's Mountain models crowning the highest ridges, and the
++// pack's beach / cliff / slope / rock pieces (render/terrainPieces.ts).
+ // Chunks are built once; a terrain edit only rebuilds the chunks it touched.
+ import type { Scene } from '@babylonjs/core/scene'
+ import { Mesh } from '@babylonjs/core/Meshes/mesh'
+@@ -16,11 +17,13 @@
+ import { CHUNK, chunkCells, chunksPerSide, fillChunk } from './chunkData'
+ import { buildWater } from './waterData'
+ import { loadModel } from './assetLoader'
++import { hidePieces, spawnTerrainPieces } from './terrainPieces'
+ 
+ const chunks = new Map<string, Mesh>()
+ 
+ /** After the terrain heights change, rebuild only the chunks that touch the changed corners. */
+ export function syncTerrainMesh(_scene: Scene, t: Terrain, b: EditBounds) {
++  hidePieces(t, b)
+   const last = chunksPerSide(t) - 1
+   const c0 = Math.max(0, Math.floor((b.i0 - 1) / CHUNK))
+   const c1 = Math.min(last, Math.floor(b.i1 / CHUNK))
+@@ -125,6 +128,7 @@
+   }
+   createWater(scene, t)
+   void spawnPeaks(scene, t)
++  void spawnTerrainPieces(scene, t) // the pack's beach, cliff, slope and rock pieces
+ 
+   // a sun from the side makes hills readable; turn the all-over light down a little to match
+   const sun = new DirectionalLight('terrainSun', new Vector3(-0.5, -1, -0.4), scene)
+diff -ruN a/src/render/terrainPieces.ts b/src/render/terrainPieces.ts
+--- a/src/render/terrainPieces.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/render/terrainPieces.ts	2026-10-13 02:07:39.967574800 +0000
+@@ -0,0 +1,74 @@
++// WHAT THIS FILE DOES
++// Stands the Modular Terrain Pack pieces chosen by sim/terrainKit.ts on the ground. Each model is
++// loaded once and drawn with "thin instances" (one draw call per material, however many copies),
++// so thousands of cliff, beach, slope and rock pieces stay cheap. The pieces keep the pack's own
++// geometry and materials; only position, turn and (for slope strips) height stretch are applied.
++// When a building edits the ground, pieces on or beside the edited tiles are hidden (see hidePieces)
++// so nothing is left floating or buried.
++import type { Scene } from '@babylonjs/core/scene'
++import { Mesh } from '@babylonjs/core/Meshes/mesh'
++import '@babylonjs/core/Meshes/thinInstanceMesh' // needed for thin instances to work
++import { loadModel } from './assetLoader'
++import { pieceMatrix } from './pieceMatrix'
++import { models } from '../assets'
++import type { EditBounds } from '../sim/terrainEdit'
++import type { Terrain, TerrainPiece } from '../sim/terrain'
++
++interface Batch {
++  mesh: Mesh
++  data: Float32Array
++  pieces: TerrainPiece[]
++}
++const batches: Batch[] = []
++
++async function spawnGroup(scene: Scene, id: string, list: TerrainPiece[]) {
++  const { meshes } = await loadModel(scene, id)
++  for (const m of meshes) {
++    if (!(m instanceof Mesh) || m.getTotalVertices() === 0) continue
++    const world = m.computeWorldMatrix(true).clone()
++    const inverse = world.clone().invert()
++    const data = new Float32Array(list.length * 16)
++    list.forEach((p, n) => pieceMatrix(world, inverse, p).copyToArray(data, n * 16))
++    m.thinInstanceSetBuffer('matrix', data, 16, false) // false = we will update it (pieces can be hidden)
++    m.thinInstanceRefreshBoundingInfo(true)
++    m.alwaysSelectAsActiveMesh = true // one batch spans the whole map; its box is always on screen somewhere
++    m.isPickable = false
++    batches.push({ mesh: m, data, pieces: list })
++  }
++}
++
++export async function spawnTerrainPieces(scene: Scene, t: Terrain) {
++  batches.length = 0
++  const groups = new Map<string, TerrainPiece[]>()
++  for (const p of t.pieces ?? []) {
++    if (!(p.id in models)) continue // file missing from src/assets/models: skip it
++    const list = groups.get(p.id) ?? []
++    list.push(p)
++    groups.set(p.id, list)
++  }
++  for (const [id, list] of groups) {
++    try {
++      await spawnGroup(scene, id, list)
++    } catch (err) {
++      console.error(`terrain piece ${id} failed:`, err)
++    }
++  }
++}
++
++/** After the ground under (and beside) a building changed, hide the pack pieces that no longer fit it. */
++export function hidePieces(t: Terrain, b: EditBounds) {
++  const half = t.size / 2
++  for (const batch of batches) {
++    let changed = false
++    batch.pieces.forEach((p, n) => {
++      // slope strips can reach 4 tiles from their centre; everything else stays within a tile or two
++      const margin = p.id.startsWith('Hilly_Terrain') ? 4 : 1.5
++      if (p.x < b.i0 - half - margin || p.x > b.i1 - half + margin) return
++      if (p.z < b.j0 - half - margin || p.z > b.j1 - half + margin) return
++      batch.data.fill(0, n * 16, n * 16 + 16)
++      batch.data[n * 16 + 15] = 1 // scale 0 everywhere: nothing is drawn
++      changed = true
++    })
++    if (changed) batch.mesh.thinInstanceBufferUpdated('matrix')
++  }
++}
+diff -ruN a/src/render/terrainSampleColors.ts b/src/render/terrainSampleColors.ts
+--- a/src/render/terrainSampleColors.ts	2026-10-13 02:07:39.878865975 +0000
++++ b/src/render/terrainSampleColors.ts	2026-10-13 02:07:39.967359270 +0000
+@@ -10,7 +10,7 @@
+ const DIRT: RGB = [0.62, 0.5, 0.36]
+ const ROCK: RGB = [0.63, 0.62, 0.61] // pack "Rock"
+ const ROCK_DARK: RGB = [0.42, 0.42, 0.45]
+-const SAND: RGB = [0.77, 0.69, 0.56] // pack "Dirt"
++const SAND: RGB = [0.97, 0.92, 0.79] // pack "Sand - Bright", the same sand as the beach tiles, so the bank blends into them
+ const BED: RGB = [0.6, 0.52, 0.38] // riverbed
+ 
+ export const WATER_RGB: RGB = [0.2, 0.588, 0.82] // pack "Water"
+diff -ruN a/src/sim/terrain.ts b/src/sim/terrain.ts
+--- a/src/sim/terrain.ts	2026-10-13 02:07:39.881056295 +0000
++++ b/src/sim/terrain.ts	2026-10-13 02:07:39.970824388 +0000
+@@ -23,6 +23,20 @@
+   scale: number
+ }
+ 
++/** One piece of the Modular Terrain Pack standing on the ground (display only, not a gameplay object). */
++export interface TerrainPiece {
++  id: string
++  x: number
++  y: number
++  z: number
++  /** Turn around the up axis in radians (Babylon rotation.y). */
++  yaw: number
++  /** Stretch along the piece's own up axis; 1 = exactly as modelled. */
++  scaleY: number
++  /** Uniform size multiplier for props such as rocks; 1 = exactly as modelled. */
++  scale: number
++}
++
+ export interface Terrain {
+   size: number
+   seed: number
+@@ -41,6 +55,8 @@
+   wlevel?: Float32Array
+   /** Pack mountain models that crown the highest ridges (display only, not gameplay objects). */
+   peaks?: { id: string; x: number; z: number; y: number; scale: number; yaw: number }[]
++  /** Pack beach, cliff, slope and rock pieces chosen by sim/terrainKit.ts. */
++  pieces?: TerrainPiece[]
+ }
+ 
+ /** A rectangle on the ground: centre x/z and size in tiles. */
+diff -ruN a/src/sim/terrainKit.ts b/src/sim/terrainKit.ts
+--- a/src/sim/terrainKit.ts	1970-01-01 00:00:00.000000000 +0000
++++ b/src/sim/terrainKit.ts	2026-10-13 02:07:39.971648740 +0000
+@@ -0,0 +1,306 @@
++// WHAT THIS FILE DOES
++// Decides where the Modular Terrain Pack's pieces stand on the generated ground. The smooth
++// height map stays the base (so there are never holes); the pack's pieces are laid on top where
++// they genuinely fit, each one checked against the ground before it is accepted:
++//   beach  - flat sand tiles on the flat shelf worldgen leaves along the river's edge
++//   cliff  - rock wall stacks (Base / Mid / Top) along steep faces, in straight runs on the tile grid
++//   slope  - grass slope strips (Hill_Side) on lush hillsides; the ground is eased into the strip's exact shape
++//   rocks  - boulders on steep ground, beside cliffs, along the banks and (rarely) on meadows
++// Pure data, no 3D (rule: sim never imports Babylon). Pieces are display only, not gameplay objects.
++//
++// KIT FACTS (read from the .glb files, not assumed): 1 unit = 1 m = 1 tile, pivot at the tile
++// centre on the ground, Y up, flat-colour materials without textures. After Babylon imports a
++// glTF, a piece's local +z stays +z and local +x becomes world -x (the importer mirrors x), so:
++//   uphill along (ux, uz)  ->  yaw = atan2(ux, uz)               (slope strips rise toward +z)
++//   cliff face toward -x   ->  yaw = atan2(uz, -ux)  for uphill (ux, uz)  (wall faces downhill)
++import { TERRAIN_KIT as K } from '../config'
++import { heightAt, type Terrain, type TerrainPiece } from './terrain'
++
++/** Surface height along the strip (from the tile centre, metres), taken from the model vertices. */
++const SLOPES: Record<string, { len: number; z: number[]; y: number[] }> = {
++  Hilly_Terrain_Hill_Side_Gentle: { len: 4, z: [-0.5, 0.5, 2.5, 3.5], y: [0.2, 0.35, 1.05, 1.2] },
++  Hilly_Terrain_Hill_Side_Sharp: { len: 2, z: [-0.5, 0, 1, 1.5], y: [0.2, 0.35, 1.05, 1.2] },
++}
++
++/** Rocks by role: half-width in metres at scale 1 and the size range to use. */
++const ROCKS = {
++  steep: [
++    { id: 'Shared_Prop_Boulder_3', r: 0.5, s: [1.1, 1.9] },
++    { id: 'Shared_Prop_Boulder_4', r: 0.5, s: [1.1, 2] },
++    { id: 'Shared_Prop_Boulder_5', r: 0.5, s: [0.9, 1.4] },
++    { id: 'Shared_Prop_Boulder_6', r: 0.6, s: [1.1, 2] },
++    { id: 'Cliff_Prop_Rock_1', r: 0.5, s: [1.2, 2] },
++    { id: 'Cliff_Prop_Rock_2', r: 0.5, s: [1, 1.6] },
++  ],
++  bank: [
++    { id: 'Shared_Prop_Boulder_1', r: 0.45, s: [1, 1.6] },
++    { id: 'Shared_Prop_Boulder_2', r: 0.5, s: [1, 1.5] },
++    { id: 'Shared_Prop_Boulder_6', r: 0.6, s: [0.9, 1.4] },
++    { id: 'Hilly_Prop_Rock_2', r: 0.5, s: [1, 1.6] },
++    { id: 'Hilly_Prop_Rock_3', r: 1, s: [0.9, 1.4] },
++  ],
++  meadow: [
++    { id: 'Hilly_Prop_Rock_1', r: 0.4, s: [1, 1.5] },
++    { id: 'Hilly_Prop_Rock_2', r: 0.5, s: [1, 1.5] },
++    { id: 'Hilly_Prop_Rock_3', r: 1, s: [0.9, 1.3] },
++    { id: 'Hilly_Prop_Rock_4', r: 0.75, s: [0.9, 1.3] },
++  ],
++}
++
++function hash2(x: number, z: number, s: number) {
++  let h = Math.imul(x | 0, 374761393) ^ Math.imul(z | 0, 668265263) ^ Math.imul(s | 0, 1274126177)
++  h = Math.imul(h ^ (h >>> 13), 1274126177)
++  h ^= h >>> 16
++  return (h >>> 0) / 4294967296
++}
++
++const profileAt = (p: { z: number[]; y: number[] }, s: number) => {
++  if (s <= p.z[0]) return p.y[0]
++  for (let q = 1; q < p.z.length; q++) {
++    if (s <= p.z[q]) return p.y[q - 1] + ((p.y[q] - p.y[q - 1]) * (s - p.z[q - 1])) / (p.z[q] - p.z[q - 1])
++  }
++  return p.y[p.y.length - 1]
++}
++
++// the four tile-grid directions a straight piece can face
++const DIRS: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1]]
++
++export function planTerrainPieces(t: Terrain, start: { x: number; z: number }): TerrainPiece[] {
++  const N = t.size
++  const S = N + 1
++  const H = N / 2
++  const h = t.heights
++  const pieces: TerrainPiece[] = []
++  const used = new Uint8Array(N * N) // 1 = a piece already stands on this tile
++
++  const cx = (i: number) => i + 0.5 - H
++  const cz = (j: number) => j + 0.5 - H
++  const inMap = (i: number, j: number) => i >= 0 && j >= 0 && i < N && j < N
++  const nearStart = (x: number, z: number) => Math.hypot(x - start.x, z - start.z) < K.clearRadius
++  const corners = (i: number, j: number) => {
++    const k = j * S + i
++    return [k, k + 1, k + S, k + S + 1]
++  }
++  const wet = (i: number, j: number) => !!t.water && corners(i, j).some((k) => t.water![k])
++  const cellOf = (x: number, z: number) => ({ i: Math.floor(x + H), j: Math.floor(z + H) })
++
++  // ---------------- grass slopes: the hillside is eased into the strip's exact shape, then the strips are laid on it ----------------
++  const lush = (i: number, j: number) => {
++    if (wet(i, j) || used[j * N + i]) return false
++    const ks = corners(i, j)
++    const tint = t.tint ? ks.reduce((a, k) => a + t.tint![k], 0) / 4 : 0
++    const bank = t.bank ? Math.max(...ks.map((k) => t.bank![k])) : 0
++    return tint < 0.3 && bank < 0.2 && h[ks[0]] < K.cliffRockLine && !nearStart(cx(i), cz(j))
++  }
++  /** Best-fit (height, stretch) of a run of strips, and how far the ground is from that shape at worst. */
++  const fitRun = (id: string, i: number, j: number, dir: number, width: number) => {
++    const prof = SLOPES[id]
++    const [ux, uz] = DIRS[dir]
++    const [lx, lz] = [-uz, ux]
++    for (let m = 0; m < width; m++) {
++      for (let k = 0; k < prof.len; k++) {
++        const ti = i + lx * m + ux * k
++        const tj = j + lz * m + uz * k
++        if (!inMap(ti, tj) || !lush(ti, tj)) return null
++      }
++    }
++    const px = cx(i)
++    const pz = cz(j)
++    const g: number[] = []
++    const p: number[] = []
++    for (let q = 0; q <= prof.len * 2; q++) {
++      const s = -0.5 + q * 0.5
++      for (let r = 0; r <= width * 2; r++) {
++        const l = -0.5 + r * 0.5
++        g.push(heightAt(t, px + ux * s + lx * l, pz + uz * s + lz * l))
++        p.push(profileAt(prof, s))
++      }
++    }
++    const mean = (v: number[]) => v.reduce((a, b) => a + b, 0) / v.length
++    const mg = mean(g)
++    const mp = mean(p)
++    let cov = 0
++    let varp = 0
++    for (let q = 0; q < g.length; q++) {
++      cov += (p[q] - mp) * (g[q] - mg)
++      varp += (p[q] - mp) ** 2
++    }
++    const sc = cov / varp
++    const y0 = mg - sc * mp
++    if (sc < 0.6 || sc > 1.5) return null
++    let worst = 0
++    for (let q = 0; q < g.length; q++) worst = Math.max(worst, Math.abs(y0 + sc * p[q] - g[q]))
++    return worst <= K.slopeFitTolerance ? { sc, y0 } : null
++  }
++  for (const id of Object.keys(SLOPES)) {
++    const prof = SLOPES[id]
++    for (let dir = 0; dir < 4; dir++) {
++      const [ux, uz] = DIRS[dir]
++      const [lx, lz] = [-uz, ux] // sideways along the run
++      for (let j = 0; j < N; j++) {
++        for (let i = 0; i < N; i++) {
++          if (!lush(i, j)) continue
++          let best: { width: number; sc: number; y0: number } | null = null
++          for (let width = K.slopeMinWidth; width <= K.slopeMaxWidth; width++) {
++            const f = fitRun(id, i, j, dir, width)
++            if (!f) break
++            best = { width, ...f }
++          }
++          if (!best) continue
++          const px = cx(i)
++          const pz = cz(j)
++          for (let m = 0; m < best.width; m++) {
++            for (let k = 0; k < prof.len; k++) {
++              const ti = i + lx * m + ux * k
++              const tj = j + lz * m + uz * k
++              used[tj * N + ti] = 1
++              for (const kc of corners(ti, tj)) {
++                const ci = kc % S
++                const cj = (kc - ci) / S
++                const sAlong = (ci - H - px) * ux + (cj - H - pz) * uz
++                h[kc] = best.y0 + best.sc * profileAt(prof, sAlong) // the ground now IS the strip's shape
++              }
++            }
++            pieces.push({
++              id,
++              x: cx(i + lx * m), z: cz(j + lz * m),
++              y: best.y0 + 0.02, // a hair above the ground so the two surfaces never flicker
++              yaw: Math.atan2(ux, uz), scaleY: best.sc, scale: 1,
++            })
++          }
++        }
++      }
++    }
++  }
++
++  // ---------------- beach: flat sand tiles on the shelf along the water's edge ----------------
++  const beachCell = new Uint8Array(N * N)
++  if (t.wlevel) {
++    const wl = t.wlevel
++    for (let j = 0; j < N; j++) {
++      for (let i = 0; i < N; i++) {
++        if (used[j * N + i]) continue
++        const ks = corners(i, j)
++        if (!ks.every((k) => wl[k] === wl[k] && !(t.water && t.water[k]) && h[k] - wl[k] > 0.03 && h[k] - wl[k] < 0.3)) continue
++        const hs = ks.map((k) => h[k])
++        if (Math.max(...hs) - Math.min(...hs) > 0.1) continue // only truly flat tiles, so the sheet lies on the ground
++        pieces.push({
++          id: 'Beach_Terrain_Sand_Floor',
++          x: cx(i), z: cz(j),
++          y: hs.reduce((a, b) => a + b, 0) / 4 + 0.025,
++          yaw: 0, scaleY: 1, scale: 1,
++        })
++        used[j * N + i] = 1
++        beachCell[j * N + i] = 1
++      }
++    }
++  }
++
++  // ---------------- cliffs: wall stacks in straight runs along steep faces ----------------
++  const wallDir = new Int8Array(N * N).fill(-1) // which of DIRS is uphill, -1 = not a cliff candidate
++  for (let j = 0; j < N; j++) {
++    for (let i = 0; i < N; i++) {
++      if (used[j * N + i] || wet(i, j) || nearStart(cx(i), cz(j))) continue
++      const [a, b, c, d] = corners(i, j).map((k) => h[k])
++      const gx = (b + d - a - c) / 2
++      const gz = (c + d - a - b) / 2
++      if (Math.hypot(gx, gz) < K.cliffGrade) continue
++      const lo = Math.min(a, b, c, d)
++      const hi = Math.max(a, b, c, d)
++      if (Math.floor(hi / K.cliffBandHeight) === Math.floor(lo / K.cliffBandHeight)) continue // no ledge line crosses here
++      wallDir[j * N + i] = Math.abs(gx) >= Math.abs(gz) ? (gx > 0 ? 0 : 1) : gz > 0 ? 2 : 3
++    }
++  }
++  const runLength = (i: number, j: number, dir: number) => {
++    const [ux] = DIRS[dir]
++    const [li, lj] = ux !== 0 ? [0, 1] : [1, 0] // the ledge runs across the uphill direction
++    let n = 1
++    for (const sgn of [1, -1]) {
++      for (let q = 1; q < K.cliffMinRun; q++) {
++        const ni = i + li * q * sgn
++        const nj = j + lj * q * sgn
++        if (!inMap(ni, nj) || wallDir[nj * N + ni] !== dir) break
++        n++
++      }
++    }
++    return n
++  }
++  const walls: { i: number; j: number; dir: number }[] = []
++  for (let j = 0; j < N; j++) {
++    for (let i = 0; i < N; i++) {
++      const dir = wallDir[j * N + i]
++      if (dir >= 0 && runLength(i, j, dir) >= K.cliffMinRun) walls.push({ i, j, dir })
++    }
++  }
++  const wallCell = new Uint8Array(N * N)
++  for (const { i, j, dir } of walls) {
++    const [ux, uz] = DIRS[dir]
++    const vx = -uz
++    const vz = ux
++    const px = cx(i)
++    const pz = cz(j)
++    const fx = px - 0.5 * ux // the cliff face sits on the downhill edge of the tile
++    const fz = pz - 0.5 * uz
++    const bx = px + 0.25 * ux // the wall is 0.75 thick, so its back is 0.25 past the centre
++    const bz = pz + 0.25 * uz
++    const front = [0, 0.5, -0.5].map((l) => heightAt(t, fx + vx * l, fz + vz * l))
++    const back = [0, 0.5, -0.5].map((l) => heightAt(t, bx + vx * l, bz + vz * l))
++    const y0 = Math.min(...front) - 0.2 // sunk into the ground, so the foot never floats
++    const need = Math.max(...back) - y0
++    const n = Math.min(K.cliffMaxStack, Math.max(1, Math.ceil(need - 0.1)))
++    if (y0 + n + 0.2 < Math.max(...back) - 0.02) continue // too tall for the stack: leave the ground as it is
++    const yaw = Math.atan2(uz, -ux)
++    const topId = y0 > K.cliffRockLine ? 'Cliff_Terrain_Side_Base' : 'Cliff_Terrain_Side_Top'
++    const stack: string[] = n === 1 ? [topId] : ['Cliff_Terrain_Side_Base', ...Array(n - 2).fill('Cliff_Terrain_Side_Mid'), topId]
++    stack.forEach((id, level) => pieces.push({ id, x: px, y: y0 + level, z: pz, yaw, scaleY: 1, scale: 1 }))
++    used[j * N + i] = 1
++    wallCell[j * N + i] = 1
++  }
++
++  // ---------------- rocks ----------------
++  const rockCount = { steep: 0, bank: 0, meadow: 0, foot: 0 }
++  for (let j = 3; j < N - 3; j++) {
++    for (let i = 3; i < N - 3; i++) {
++      if (used[j * N + i] || wet(i, j) || nearStart(cx(i), cz(j))) continue
++      const ks = corners(i, j)
++      const [a, b, c, d] = ks.map((k) => h[k])
++      const grade = Math.max(Math.abs(a - b), Math.abs(a - c), Math.abs(d - b), Math.abs(d - c))
++      const bank = t.bank ? Math.max(...ks.map((k) => t.bank![k])) : 0
++      const beside = (arr: Uint8Array) => arr[j * N + i - 1] || arr[j * N + i + 1] || arr[(j - 1) * N + i] || arr[(j + 1) * N + i]
++      let role: keyof typeof ROCKS | null = null
++      let chance = 0
++      let kind: keyof typeof rockCount = 'meadow'
++      if (beside(wallCell)) { role = 'steep'; chance = K.rockChanceCliffFoot; kind = 'foot' }
++      else if (grade >= 0.6) { role = 'steep'; chance = K.rockChanceSteep; kind = 'steep' }
++      else if (bank > 0.15 || beside(beachCell)) { role = 'bank'; chance = K.rockChanceBank; kind = 'bank' }
++      else if (grade < 0.5) { role = 'meadow'; chance = K.rockChanceMeadow; kind = 'meadow' }
++      if (!role || hash2(i, j, t.seed + 700) >= chance) continue
++      const list = ROCKS[role]
++      const def = list[Math.floor(hash2(i, j, t.seed + 701) * list.length)]
++      const scale = def.s[0] + (def.s[1] - def.s[0]) * hash2(i, j, t.seed + 702)
++      const x = cx(i) + (hash2(i, j, t.seed + 703) - 0.5) * 0.5
++      const z = cz(j) + (hash2(i, j, t.seed + 704) - 0.5) * 0.5
++      const reach = def.r * scale
++      let low = Infinity
++      let high = -Infinity
++      for (const [ox, oz] of [[0, 0], [reach, 0], [-reach, 0], [0, reach], [0, -reach]]) {
++        const g = heightAt(t, x + ox, z + oz)
++        low = Math.min(low, g)
++        high = Math.max(high, g)
++      }
++      if (high - low > 1.6 * scale) continue // near-vertical ground: a rock would just be buried, leave it bare
++      const at = cellOf(x, z)
++      if (!inMap(at.i, at.j) || used[at.j * N + at.i]) continue
++      pieces.push({ id: def.id, x, z, y: low - 0.15 * scale, yaw: hash2(i, j, t.seed + 705) * Math.PI * 2, scaleY: 1, scale })
++      used[j * N + i] = 1
++      t.blocked[j * N + i] = 1 // like trees and stones, nothing can be built on a rock
++      rockCount[kind]++
++    }
++  }
++
++  const count = (pre: string) => pieces.filter((p) => p.id.startsWith(pre)).length
++  console.log(
++    `terrain pieces: ${pieces.length} (beach ${count('Beach_')}, cliff ${count('Cliff_Terrain')}, slope ${count('Hilly_Terrain')}, rocks ${JSON.stringify(rockCount)})`,
++  )
++  return pieces
++}
+diff -ruN a/src/sim/worldgen.ts b/src/sim/worldgen.ts
+--- a/src/sim/worldgen.ts	2026-10-13 02:07:39.881457823 +0000
++++ b/src/sim/worldgen.ts	2026-10-13 02:07:39.971360159 +0000
+@@ -2,9 +2,12 @@
+ // Generates the playable world (fixed seed) as a Terrain: flat colony plains + gentle hills +
+ // domain-warped ridged mountain ranges + Voronoi regions + erosion-style valleys + a river that
+ // snakes between the ridges. Pure numbers, no 3D. Runs once at start-up, never per frame.
+-// No trees, rocks or other decorations are generated here.
++// Trees and other decorations are not generated here; the pack's beach, cliff, slope and rock
++// pieces are chosen at the end by sim/terrainKit.ts.
+ import { fbm, makeNoise2D, smoothstep } from './noise'
+ import { MAX_TILE_STEP, WORLD_SIZE, type Terrain } from './terrain'
++import { TERRAIN_KIT } from '../config'
++import { planTerrainPieces } from './terrainKit'
+ 
+ /** Where the colony starts: a broad, flat meadow. The camera starts here too. */
+ export const START = { x: -34, z: 40 }
+@@ -283,6 +286,11 @@
+       else if (d <= ww) T = bedY + (dw * (d - wb)) / (ww - wb)
+       else T = surf[m] + 0.5 * (d - ww) + 1.6 * nDetail((i - H) * 0.07, (j - H) * 0.07) * smoothstep(3, 12, d - ww)
+       h[k] = smin(h[k], T, 0.9)
++      // beach shelf: a flat strip just above the waterline where the bank is gentle, so the pack's flat sand tiles lie exactly on it
++      if (d > ww + 0.2 && d <= ww + 0.2 + TERRAIN_KIT.beachShelfWidth) {
++        const shelf = surf[m] + TERRAIN_KIT.beachShelfHeight
++        if (h[k] > shelf && h[k] - shelf < 1.4) h[k] = shelf
++      }
+       if (d <= ww + 2.5) wlevel[k] = surf[m]
+       bank[k] = 1 - smoothstep(ww + 0.2, ww + 3.2, d)
+       water[k] = wlevel[k] > h[k] ? 1 : 0
+@@ -319,8 +327,12 @@
+     peaks.push({ id, x, z, y: lo - 0.4, scale, yaw })
+   }
+ 
++  // the pack's pieces are chosen BEFORE buildability is worked out: slope strips ease the ground into their shape
++  const terrain: Terrain = { size: N, seed, heights: h, buildable: new Uint8Array(N * N), blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, wlevel, peaks }
++  terrain.pieces = planTerrainPieces(terrain, START)
++
+   // a tile can be built on if it is flat enough and none of its corners are under the river
+-  const buildable = new Uint8Array(N * N)
++  const buildable = terrain.buildable
+   for (let j = 0; j < N; j++) {
+     for (let i = 0; i < N; i++) {
+       const k = j * S + i
+@@ -332,5 +344,5 @@
+ 
+   const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0
+   console.log(`world generated: ${N}x${N} in ${ms.toFixed(0)} ms`)
+-  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, wlevel, peaks }
++  return terrain
+ }
