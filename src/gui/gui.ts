@@ -30,13 +30,13 @@ export function initUI(root: HTMLElement, world: World, engine: Engine, scene: S
     else if (note) hint.textContent = note
     else if (mode === 'rts') {
       hint.textContent =
-        'WASD move | Q/E rotate | Scroll zoom | Right-drag orbit | Shift fast | B build | F free-fly | Z terrain sample'
+        'WASD move | Q/E rotate | Scroll zoom | Right-drag orbit | Shift fast | B build | F free-fly | Z overview, X showroom'
     } else if (document.pointerLockElement) {
       hint.textContent =
-        'FREE-FLY: mouse looks, WASD/QE fly, Shift fast, L = free mouse, B build, Z terrain sample, F = back'
+        'FREE-FLY: mouse looks, WASD/QE fly, Shift fast, L = free mouse, B build, Z overview, X showroom, F = back'
     } else {
       hint.textContent =
-        'FREE-FLY: press L to lock mouse and look, B build, Z terrain sample, F = back to main camera'
+        'FREE-FLY: press L to lock mouse and look, B build, Z overview, X showroom, F = back to main camera'
     }
   }
 

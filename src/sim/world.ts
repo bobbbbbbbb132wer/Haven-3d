@@ -1,7 +1,8 @@
 // WHAT THIS FILE DOES
-// The world as pure data: what the colony owns, what is unlocked, what is being built.
+// The world as pure data: what the colony owns, what is unlocked, what is being built, the time.
 // RULE: never import Babylon (or touch the DOM) in the sim folder.
 import { BUILDINGS } from './buildings'
+import { createClock, type Clock } from './clock'
 import { createConstruction, type Construction } from './construction'
 
 export interface World {
@@ -13,6 +14,8 @@ export interface World {
   unlockedBuildings: string[]
   /** Construction sites and finished buildings. */
   construction: Construction
+  /** Day number and time of day. */
+  clock: Clock
 }
 
 export function createWorld(): World {
@@ -21,5 +24,6 @@ export function createWorld(): World {
     reserved: {},
     unlockedBuildings: BUILDINGS.filter((b) => b.startsUnlocked).map((b) => b.id),
     construction: createConstruction(),
+    clock: createClock(),
   }
 }
