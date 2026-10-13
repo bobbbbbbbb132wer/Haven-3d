@@ -1,6 +1,7 @@
 // WHAT THIS FILE DOES
 // Categories and footprints (in tiles) for each building, plus how long it takes to build.
 // Pure data, no 3D in here. To categorise a new building, add one line to META.
+import { FARM_BUILDINGS, MODEL_OF, WELL_META } from './farmBuildings'
 
 export interface CategoryDef {
   id: string
@@ -38,7 +39,13 @@ export const META: Record<string, BuildingMeta> = {
   stove: { category: 'production', w: 1, d: 1 },
   forge: { category: 'production', w: 2, d: 2 },
   farm: { category: 'farming', w: 3, d: 3 },
-  well: { category: 'farming', w: 2, d: 2 },
+  well: WELL_META,
+  ...Object.fromEntries(FARM_BUILDINGS.map((f) => [f.def.id, f.meta])),
+}
+
+/** Key of the model in src/assets/models for a building (defaults to the building id). */
+export function modelOf(id: string): string {
+  return MODEL_OF[id] ?? id
 }
 
 export function metaOf(id: string): BuildingMeta {

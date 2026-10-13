@@ -19,7 +19,7 @@ import { models } from '../assets'
 import { loadModel } from './assetLoader'
 import { addCampfireEffects } from './campfireEffects'
 import { BUILDINGS, canAfford } from '../sim/buildings'
-import { buildSeconds, metaOf } from '../sim/buildingMeta'
+import { buildSeconds, metaOf, modelOf } from '../sim/buildingMeta'
 import {
   addSite,
   overlaps,
@@ -72,14 +72,15 @@ interface SiteVisual {
 // Loads a building's model, sizes it to its footprint, centres it and sits it on the ground.
 async function loadBuildingModel(scene: Scene, id: string, width: number): Promise<Model> {
   const holder = new TransformNode(`b_${id}`, scene)
-  if (!(id in models)) {
+  const modelKey = modelOf(id)
+  if (!(modelKey in models)) {
     const m = metaOf(id)
     const box = MeshBuilder.CreateBox('fallback', { width: m.w, depth: m.d, height: 1 }, scene)
     box.parent = holder
     box.position.y = 0.5
     return { holder, meshes: [box], nodes: [] }
   }
-  const { meshes, transformNodes } = await loadModel(scene, id)
+  const { meshes, transformNodes } = await loadModel(scene, modelKey)
   const root = meshes[0]
   root.parent = holder
   const first = root.getHierarchyBoundingVectors(true)

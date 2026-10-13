@@ -8,7 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host",
     "format": "prettier --write src",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "import:farm": "node scripts/import-farm-buildings.mjs src/assets/raw/farm-buildings/OBJ",
+    "import:nature": "node scripts/import-nature-megakit.mjs src/assets/raw/nature-megakit/glTF"
   },
   "dependencies": {
     "@babylonjs/core": "^9.30.0",
@@ -17,6 +19,10 @@
     "@babylonjs/loaders": "^9.30.0"
   },
   "devDependencies": {
+    "@gltf-transform/core": "^4.5.1",
+    "@gltf-transform/extensions": "^4.5.1",
+    "@gltf-transform/functions": "^4.5.1",
+    "obj2gltf": "^3.2.0",
     "prettier": "^3.9.10",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",

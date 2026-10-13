@@ -4,6 +4,7 @@
 // To add a building: add one line to BUILDINGS below.
 import type { World } from './world'
 import { availableOf } from './resources'
+import { FARM_BUILDINGS } from './farmBuildings'
 
 export interface ResourceDef {
   name: string
@@ -75,6 +76,8 @@ export const BUILDINGS: BuildingDef[] = [
     cost: { wood: 40, stone: 20 },
     unlockHint: 'Research: Defense',
   },
+  // Farm Buildings pack (Quaternius): data lives in sim/farmBuildings.ts
+  ...FARM_BUILDINGS.map((f) => f.def),
 ]
 
 export function isUnlocked(world: World, id: string) {

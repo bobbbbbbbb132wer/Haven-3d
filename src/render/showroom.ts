@@ -1,6 +1,6 @@
 // WHAT THIS FILE DOES
 // The showroom: a flat grid beside the world (not connected to it). Every model in
-// src/assets/models (the campfire plus the whole Modular Terrain Pack) stands on a pedestal at
+// src/assets/models (the campfire, the Farm Buildings and the Modular Terrain Pack) stands on a pedestal at
 // its real size, grouped by kind, one group per row, spinning slowly. Name labels only appear
 // for pedestals near the camera. A tilted status board on the ground shows the day, time of day,
 // resources and other stats live. Press X to fly the camera there, X again to go back.
@@ -17,6 +17,7 @@ import { Rectangle } from '@babylonjs/gui/2D/controls/rectangle'
 import { TextBlock } from '@babylonjs/gui/2D/controls/textBlock'
 import { models } from '../assets'
 import { loadModel } from './assetLoader'
+import { cycleAnimations } from './colonistView'
 import { getTerrain } from '../sim/terrain'
 import type { World } from '../sim/world'
 import { SHOWROOM } from './showroomSpec'
@@ -29,13 +30,29 @@ const FIRST_ROW_Z = -54
 const MAX_FIT = 3.6 // models wider than this are shrunk to fit their pedestal
 const BOARD = { w: 32, h: 16, z: 40, y: 3, tilt: 0.35 }
 const GROUP_ORDER = [
-  'campfire', 'Hilly_Terrain', 'Mountain', 'Shared_Terrain', 'Hilly_Prop', 'Shared_Prop',
+  'campfire', 'Colonist', 'Farm', 'Nature_Tree', 'Nature_Plant', 'Nature_Flower', 'Nature_Rock', 'Hilly_Terrain', 'Mountain', 'Shared_Terrain', 'Hilly_Prop', 'Shared_Prop',
   'Beach_Terrain', 'Beach_Prop', 'Cliff_Terrain', 'Cliff_Prop', 'Escarpment_Terrain',
   'Cave_Terrain', 'Cave_Cliff', 'Cave_Prop',
 ]
 
+// Old terrain-pack structures the Farm Buildings replace in the showroom (files stay for later).
+const REPLACED_BY_FARM = (n: string) => n === 'Hilly_Prop_Camp_Lean_To' || n.startsWith('Hilly_Prop_Fence_')
+
+// Farm buildings are big: they get wider rows and pedestals, still at their real size.
+const FARM = { cols: 9, spacing: 12, fit: 10, pad: 10 }
+
+// Nature MegaKit pieces are shown in rows by kind.
+const natureGroup = (n: string) =>
+  /^Nature_(CommonTree|Pine|TwistedTree|DeadTree)/.test(n) ? 'Nature_Tree'
+  : /^Nature_(Flower|Petal)/.test(n) ? 'Nature_Flower'
+  : /^Nature_(Rock|Pebble)/.test(n) ? 'Nature_Rock'
+  : 'Nature_Plant'
+
 const groupOf = (n: string) =>
   n === 'campfire' ? 'campfire'
+  : n.startsWith('Colonist_') ? 'Colonist'
+  : n.startsWith('Farm_') ? 'Farm'
+  : n.startsWith('Nature_') ? natureGroup(n)
   : n.startsWith('Mountain') ? 'Mountain'
   : n.startsWith('Cave_Cliff') ? 'Cave_Cliff'
   : n.split('_').slice(0, 2).join('_')
@@ -53,18 +70,25 @@ function layout(names: string[]) {
     const ib = GROUP_ORDER.indexOf(b)
     return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b)
   })
-  const slots: { name: string; x: number; z: number }[] = []
+  const slots: { name: string; x: number; z: number; fit: number; pad: number }[] = []
   let row = 0
   for (const g of groups) {
     const list = byGroup.get(g)!.sort((a, b) => a.localeCompare(b))
+    const farm = g === 'Farm'
+    const cols = farm ? FARM.cols : COLS
+    const gap = farm ? FARM.spacing : SPACING
+    const rowStep = gap / SPACING // a farm row is as deep as several normal rows
     list.forEach((name, i) => {
+      const inRow = Math.min(cols, list.length - Math.floor(i / cols) * cols)
       slots.push({
         name,
-        x: ((i % COLS) - (COLS - 1) / 2) * SPACING,
-        z: FIRST_ROW_Z + (row + Math.floor(i / COLS)) * SPACING,
+        x: ((i % cols) - (inRow - 1) / 2) * gap,
+        z: FIRST_ROW_Z + (row + Math.floor(i / cols) * rowStep) * SPACING,
+        fit: farm ? FARM.fit : MAX_FIT,
+        pad: farm ? FARM.pad : 3.4,
       })
     })
-    row += Math.ceil(list.length / COLS)
+    row += Math.ceil(list.length / cols) * rowStep
   }
   return slots
 }
@@ -158,14 +182,18 @@ export async function spawnShowroom(scene: Scene, world: World, engine: Engine) 
   })
 
   // ---- the models ----
-  const slots = layout(Object.keys(models))
+  const slots = layout(Object.keys(models).filter((n) => !REPLACED_BY_FARM(n)))
   const ui = AdvancedDynamicTexture.CreateFullscreenUI('showroomLabels', true, scene)
   const spinners: TransformNode[] = []
   const labels: { label: Rectangle; holder: TransformNode; shown: boolean }[] = []
   const padMat = new StandardMaterial('padMat', scene)
   padMat.diffuseColor = new Color3(0.25, 0.28, 0.32)
   padMat.specularColor = Color3.Black()
-  let padSource: Mesh | null = null
+  // one real pedestal (hidden), every pedestal is a cheap instance of it, scaled to its slot
+  const padSource: Mesh = MeshBuilder.CreateCylinder('padSource', { diameter: 1, height: 0.1 }, scene)
+  padSource.material = padMat
+  padSource.isPickable = false
+  padSource.isVisible = false
 
   let tick = 0
   scene.onBeforeRenderObservable.add(() => {
@@ -190,16 +218,17 @@ export async function spawnShowroom(scene: Scene, world: World, engine: Engine) 
     }
   })
 
-  const place = async (slot: { name: string; x: number; z: number }) => {
+  const place = async (slot: { name: string; x: number; z: number; fit: number; pad: number }) => {
     try {
-      const { meshes } = await loadModel(scene, slot.name)
+      const { meshes, animationGroups } = await loadModel(scene, slot.name)
+      if (slot.name.startsWith('Colonist_')) cycleAnimations(scene, animationGroups)
       const holder = new TransformNode(`show_${slot.name}`, scene)
       const modelRoot = meshes[0]
       modelRoot.parent = holder
 
       // real size, centred on its pedestal; only shrink pieces that are too big for it
       const first = modelRoot.getHierarchyBoundingVectors(true)
-      const k = Math.min(1, MAX_FIT / Math.max(first.max.x - first.min.x, first.max.z - first.min.z, 0.001))
+      const k = Math.min(1, slot.fit / Math.max(first.max.x - first.min.x, first.max.z - first.min.z, 0.001))
       modelRoot.scaling.scaleInPlace(k)
       modelRoot.computeWorldMatrix(true)
       const b = modelRoot.getHierarchyBoundingVectors(true)
@@ -212,16 +241,10 @@ export async function spawnShowroom(scene: Scene, world: World, engine: Engine) 
       holder.position.set(slot.x, 0.1, slot.z)
       spinners.push(holder)
 
-      // one real pedestal, the rest are cheap instances of it
-      let pad
-      if (!padSource) {
-        padSource = MeshBuilder.CreateCylinder('padSource', { diameter: 3.4, height: 0.1 }, scene)
-        padSource.material = padMat
-        padSource.isPickable = false
-        pad = padSource
-      } else pad = padSource.createInstance(`pad_${slot.name}`)
+      const pad = padSource.createInstance(`pad_${slot.name}`)
       pad.parent = root
       pad.position.set(slot.x, 0.05, slot.z)
+      pad.scaling.set(slot.pad, 1, slot.pad)
 
       const label = new Rectangle()
       label.width = '230px'
