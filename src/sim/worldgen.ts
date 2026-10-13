@@ -301,7 +301,7 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
   }
   cands.sort((a, b) => b.hh - a.hh)
   for (const c of cands) {
-    if (peaks.length >= 14) break
+    if (peaks.length >= 0) break
     const x = c.i - H
     const z = c.j - H
     if (Math.hypot(x - START.x, z - START.z) < 60) continue
