@@ -6,6 +6,7 @@ import { createScene } from '../render/scene'
 import { initUI } from '../gui/gui'
 import { startLoop } from './loop'
 import { initDebugKeys } from './debugKeys'
+import { sample } from '../sim/resources'
 import { initDaylight } from '../render/daylight'
 import { spawnShowroom } from '../render/showroom'
 
@@ -16,5 +17,7 @@ export async function startGame() {
   spawnShowroom(view.scene, world, view.engine).catch((e) => console.error('Showroom failed:', e))
   initUI(document.getElementById('ui')!, world, view.engine, view.scene)
   initDebugKeys(world)
+  sample(world, performance.now())
+  setInterval(() => sample(world, performance.now()), 1000)
   startLoop(world, view)
 }

@@ -16,7 +16,7 @@ type V3 = [number, number, number]
 
 const VIEWS: Record<'overview' | 'showroom', { x: number; z: number; pitch: number; zoom: number; focusY: number; flyPos: V3; flyAim: V3 }> = {
   overview: { x: 0, z: 0, pitch: 60, zoom: WORLD_SIZE * 0.9, focusY: 6, flyPos: [0, WORLD_SIZE * 0.6, WORLD_SIZE * 0.55], flyAim: [0, 4, 0] },
-  showroom: { x: SHOWROOM.cx, z: SHOWROOM.cz + 4, pitch: 55, zoom: 70, focusY: 3, flyPos: [SHOWROOM.cx, 38, SHOWROOM.cz + 46], flyAim: [SHOWROOM.cx, 2, SHOWROOM.cz] },
+  showroom: { x: SHOWROOM.cx, z: SHOWROOM.cz - 6, pitch: 58, zoom: 165, focusY: 3, flyPos: [SHOWROOM.cx, 70, SHOWROOM.cz + 90], flyAim: [SHOWROOM.cx, 2, SHOWROOM.cz - 6] },
 }
 type ViewName = keyof typeof VIEWS
 

@@ -43,7 +43,12 @@ export function fillChunk(t: Terrain, ci: number, cj: number, pos: Float32Array,
     const jitter = (((ai * 73856093) ^ (aj * 19349663) ^ (ci2 * 83492791) ^ (cj2 * 2654435)) & 255) / 127.5 - 1
     const tint = t.tint ? (t.tint[ka] + t.tint[kb] + t.tint[kc]) / 3 : 0.3
     const bank = t.bank ? (t.bank[ka] + t.bank[kb] + t.bank[kc]) / 3 : 0
-    const rgb = faceColor((ay + by + cy) / 3, 1 - nyv, tint, bank, jitter)
+    let under = 0
+    if (t.wlevel) {
+      const wa = t.wlevel[ka], wb = t.wlevel[kb], wc = t.wlevel[kc]
+      if (wa === wa && wb === wb && wc === wc) under = Math.max(0, (wa + wb + wc - ay - by - cy) / 3)
+    }
+    const rgb = faceColor((ay + by + cy) / 3, 1 - nyv, tint, bank, jitter, under)
     pos[p] = ax; pos[p + 1] = ay; pos[p + 2] = az
     pos[p + 3] = bx; pos[p + 4] = by; pos[p + 5] = bz
     pos[p + 6] = cx; pos[p + 7] = cy; pos[p + 8] = cz

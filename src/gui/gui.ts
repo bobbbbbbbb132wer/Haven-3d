@@ -8,7 +8,6 @@ import type { Engine } from '@babylonjs/core/Engines/engine'
 import type { Scene } from '@babylonjs/core/scene'
 import { initBuildGui } from './buildGui'
 import { initPlacement } from '../render/placement'
-import { initResourceGui } from './resourceGui'
 
 export function initUI(root: HTMLElement, world: World, engine: Engine, scene: Scene) {
   createFpsCounter(root)
@@ -48,7 +47,6 @@ export function initUI(root: HTMLElement, world: World, engine: Engine, scene: S
 
   // Build menu (created after the hint so it draws on top)
   const placement = initPlacement(engine, scene, world)
-  initResourceGui(engine, scene, world)
   window.addEventListener('placementstatus', (e) => {
     note = (e as CustomEvent<string>).detail
     update()

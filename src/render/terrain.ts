@@ -1,17 +1,21 @@
 // WHAT THIS FILE DOES
 // Draws the terrain as flat-shaded low-poly chunks (colours from slope and height, no textures),
-// plus the river water. Chunks are built once; a terrain edit only rebuilds the chunks it touched.
+// the river's water surface, and the pack's Mountain models crowning the highest ridges.
+// Chunks are built once; a terrain edit only rebuilds the chunks it touched.
 import type { Scene } from '@babylonjs/core/scene'
 import { Mesh } from '@babylonjs/core/Meshes/mesh'
 import { VertexData } from '@babylonjs/core/Meshes/mesh.vertexData'
 import { VertexBuffer } from '@babylonjs/core/Buffers/buffer'
 import { StandardMaterial } from '@babylonjs/core/Materials/standardMaterial'
+import { TransformNode } from '@babylonjs/core/Meshes/transformNode'
 import { Color3 } from '@babylonjs/core/Maths/math.color'
 import { DirectionalLight } from '@babylonjs/core/Lights/directionalLight'
 import { Vector3 } from '@babylonjs/core/Maths/math.vector'
 import type { Terrain } from '../sim/terrain'
 import type { EditBounds } from '../sim/terrainEdit'
 import { CHUNK, chunkCells, chunksPerSide, fillChunk } from './chunkData'
+import { buildWater } from './waterData'
+import { loadModel } from './assetLoader'
 
 const chunks = new Map<string, Mesh>()
 
@@ -40,48 +44,54 @@ export function syncTerrainMesh(_scene: Scene, t: Terrain, b: EditBounds) {
   }
 }
 
+/** One continuous low-poly water surface that fills the lowered river channel. */
 function createWater(scene: Scene, t: Terrain) {
-  const r = t.river
-  if (!r) return
-  const pos: number[] = []
-  const nor: number[] = []
-  const idx: number[] = []
-  const n = r.x.length
-  for (let k = 0; k < n; k++) {
-    const a = Math.max(0, k - 1)
-    const b = Math.min(n - 1, k + 1)
-    let tx = r.x[b] - r.x[a]
-    let tz = r.z[b] - r.z[a]
-    const len = Math.hypot(tx, tz) || 1
-    tx /= len
-    tz /= len
-    const px = -tz
-    const pz = tx // sideways
-    pos.push(r.x[k] + px * r.half[k], r.y[k], r.z[k] + pz * r.half[k])
-    pos.push(r.x[k] - px * r.half[k], r.y[k], r.z[k] - pz * r.half[k])
-    nor.push(0, 1, 0, 0, 1, 0)
-    if (k < n - 1) {
-      const i = k * 2
-      idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2)
-    }
-  }
+  const w = buildWater(t)
+  if (!w) return
   const mesh = new Mesh('water', scene)
   const vd = new VertexData()
-  vd.positions = pos
-  vd.normals = nor
-  vd.indices = idx
+  vd.positions = w.pos
+  vd.normals = w.nor
+  vd.colors = w.col
+  vd.indices = Uint32Array.from({ length: w.pos.length / 3 }, (_, i) => i) // un-shared = flat shading
   vd.applyToMesh(mesh)
+  mesh.hasVertexAlpha = true // clearer in the shallows, so the riverbed shows through
   const mat = new StandardMaterial('waterMat', scene)
-  mat.diffuseColor = new Color3(0.2, 0.5, 0.78)
-  mat.emissiveColor = new Color3(0.05, 0.16, 0.26)
-  mat.specularColor = new Color3(0.5, 0.5, 0.5)
-  mat.specularPower = 48
-  mat.alpha = 0.82
+  mat.specularColor = new Color3(0.35, 0.35, 0.35)
+  mat.specularPower = 64
   mat.backFaceCulling = false
   mat.freeze()
   mesh.material = mat
   mesh.isPickable = false
   mesh.freezeWorldMatrix()
+}
+
+/** The pack's Mountain models, cloned onto the ridge crowns chosen by the world generator. */
+async function spawnPeaks(scene: Scene, t: Terrain) {
+  const peaks = t.peaks ?? []
+  const sources = new Map<string, Mesh | TransformNode | null>()
+  for (let n = 0; n < peaks.length; n++) {
+    const p = peaks[n]
+    try {
+      if (!sources.has(p.id)) {
+        const { meshes } = await loadModel(scene, p.id)
+        meshes[0].setEnabled(false) // the original stays hidden, the copies are what you see
+        sources.set(p.id, meshes[0] as unknown as TransformNode)
+      }
+      const src = sources.get(p.id) as TransformNode
+      const holder = new TransformNode(`peak_${n}`, scene)
+      holder.position.set(p.x, p.y, p.z)
+      holder.rotation.y = p.yaw
+      holder.scaling.setAll(p.scale)
+      const copy = src.clone(`peakModel_${n}`, holder)
+      if (copy) {
+        copy.setEnabled(true)
+        for (const m of copy.getChildMeshes()) m.isPickable = false
+      }
+    } catch (err) {
+      console.warn(`mountain ${p.id} skipped:`, err)
+    }
+  }
 }
 
 export function createTerrainMesh(scene: Scene, t: Terrain) {
@@ -114,6 +124,7 @@ export function createTerrainMesh(scene: Scene, t: Terrain) {
     }
   }
   createWater(scene, t)
+  void spawnPeaks(scene, t)
 
   // a sun from the side makes hills readable; turn the all-over light down a little to match
   const sun = new DirectionalLight('terrainSun', new Vector3(-0.5, -1, -0.4), scene)

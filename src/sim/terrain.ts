@@ -37,8 +37,10 @@ export interface Terrain {
   tint?: Float32Array
   bank?: Float32Array
   water?: Uint8Array
-  /** The river's centre line, one entry per metre of z: x, z, water height and half-width. */
-  river?: { x: Float32Array; z: Float32Array; y: Float32Array; half: Float32Array }
+  /** Height of the river's water surface at each grid corner near the river (NaN = no water here). */
+  wlevel?: Float32Array
+  /** Pack mountain models that crown the highest ridges (display only, not gameplay objects). */
+  peaks?: { id: string; x: number; z: number; y: number; scale: number; yaw: number }[]
 }
 
 /** A rectangle on the ground: centre x/z and size in tiles. */

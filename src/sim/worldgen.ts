@@ -180,61 +180,143 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
     for (let k = 0; k < S * S; k++) h[k] += delta[k]
   }
 
-  // ---- river: bed always runs downhill (north to south), valley walls cut into the ridges ----
-  const rx = new Float32Array(S)
-  const rz = new Float32Array(S)
-  const ground = new Float32Array(S)
-  for (let k = 0; k < S; k++) {
-    rz[k] = k - H
-    rx[k] = riverX(rz[k])
-    const ci = clamp(Math.round(rx[k] + H), 0, N)
-    ground[k] = h[k * S + ci]
+  // ---- river: a lowered channel (flat riverbed, sloping banks) holding one level water surface ----
+  const SUB = 4 // centre-line samples per metre, so distances to the river come out smooth
+  const M = N * SUB + 1
+  const cx = new Float32Array(M)
+  const cz = new Float32Array(M)
+  for (let m = 0; m < M; m++) {
+    cz[m] = -H + m / SUB
+    cx[m] = riverX(cz[m])
   }
-  const bed = new Float32Array(S)
-  const halfW = new Float32Array(S)
-  for (let k = 0; k < S; k++) {
-    let sum = 0
-    let cnt = 0
-    for (let q = Math.max(0, k - 14); q <= Math.min(N, k + 14); q++) {
-      sum += ground[q]
-      cnt++
-    }
-    const t = k / N
-    const avg = sum / cnt
-    bed[k] = k === 0 ? avg : Math.min(bed[k - 1] + 0.0, avg, bed[k - 1] - 0.012)
-    halfW[k] = 1.7 + 2.0 * t
-  }
-  const bedY = new Float32Array(S)
-  for (let k = 0; k < S; k++) bedY[k] = bed[k] - (1.0 + 0.9 * (k / N))
+  const tAt = (m: number) => m / (M - 1) // 0 at the river's start (north) .. 1 at its end (south)
+  const wwOf = (m: number) => 2.4 + 2.6 * tAt(m) // half-width of the water surface, metres
+  const dwOf = (m: number) => 0.9 + 0.7 * tAt(m) // water depth, metres
 
-  const bank = new Float32Array(S * S)
-  const water = new Uint8Array(S * S) // 1 = under the river
+  // 1. nearest centre-line sample (and distance) for every grid corner
+  const nearM = new Uint16Array(S * S)
+  const dist = new Float32Array(S * S)
+  const WIN = 25 * SUB
   for (let j = 0; j < S; j++) {
+    const mc = j * SUB
     for (let i = 0; i < S; i++) {
       const x = i - H
       const z = j - H
       let best = 1e9
-      let bk = j
-      for (let q = Math.max(0, j - 22); q <= Math.min(N, j + 22); q++) {
-        const d = Math.hypot(x - rx[q], z - rz[q])
-        if (d < best) {
-          best = d
-          bk = q
+      let bm = mc
+      for (let m = Math.max(0, mc - WIN); m <= Math.min(M - 1, mc + WIN); m++) {
+        const dx = x - cx[m]
+        const dz = z - cz[m]
+        const d2 = dx * dx + dz * dz
+        if (d2 < best) {
+          best = d2
+          bm = m
         }
       }
-      const k = j * S + i
-      const wall = bedY[bk] + 0.45 * Math.max(0, best - halfW[bk]) + 1.6 * nDetail(x * 0.07, z * 0.07) * smoothstep(3, 12, best)
-      h[k] = smin(h[k], wall, 2.2)
-      bank[k] = 1 - smoothstep(halfW[bk] + 0.3, halfW[bk] + 3.4, best)
-      water[k] = best <= halfW[bk] + 1.1 ? 1 : 0
+      nearM[j * S + i] = bm
+      dist[j * S + i] = Math.sqrt(best)
     }
   }
 
-  const river = {
-    x: rx,
-    z: rz,
-    y: Float32Array.from(bedY, (b) => b + 0.55),
-    half: Float32Array.from(halfW, (w) => w + 1.1),
+  // 2. ground height under the centre line (bilinear), and the lowest ground beside it
+  const hAtF = (x: number, z: number) => {
+    const gx = clamp(x + H, 0, N - 1e-6)
+    const gz = clamp(z + H, 0, N - 1e-6)
+    const i = Math.floor(gx)
+    const j = Math.floor(gz)
+    const u = gx - i
+    const v = gz - j
+    const k = j * S + i
+    return lerp(lerp(h[k], h[k + 1], u), lerp(h[k + S], h[k + S + 1], u), v)
+  }
+  const movingAvg = (src: Float32Array, r: number) => {
+    const pre = new Float64Array(M + 1)
+    for (let m = 0; m < M; m++) pre[m + 1] = pre[m] + src[m]
+    const out = new Float32Array(M)
+    for (let m = 0; m < M; m++) {
+      const a0 = Math.max(0, m - r)
+      const b0 = Math.min(M - 1, m + r)
+      out[m] = (pre[b0 + 1] - pre[a0]) / (b0 - a0 + 1)
+    }
+    return out
+  }
+  const ground = new Float32Array(M)
+  for (let m = 0; m < M; m++) ground[m] = hAtF(cx[m], cz[m])
+  const groundS = movingAvg(ground, 14 * SUB)
+  const band = new Float32Array(M).fill(1e9)
+  for (let k = 0; k < S * S; k++) {
+    const m = nearM[k]
+    if (dist[k] <= wwOf(m) + 4) band[m] = Math.min(band[m], h[k])
+  }
+  const bandMin = new Float32Array(M)
+  for (let m = 0; m < M; m++) {
+    let v = 1e9
+    for (let q = Math.max(0, m - 2 * SUB); q <= Math.min(M - 1, m + 2 * SUB); q++) v = Math.min(v, band[q])
+    bandMin[m] = v > 1e8 ? groundS[m] : v
+  }
+
+  // 3. water surface: always a little below the banks, smooth, and never flowing uphill
+  const cand = new Float32Array(M)
+  for (let m = 0; m < M; m++) cand[m] = Math.min(groundS[m] - 0.5, bandMin[m] - 0.25)
+  const candS = movingAvg(cand, 10 * SUB)
+  const surf = new Float32Array(M)
+  for (let m = 0; m < M; m++) {
+    const v = Math.min(cand[m], candS[m])
+    surf[m] = m === 0 ? v : Math.min(v, surf[m - 1] - 0.003)
+  }
+
+  // 4. carve the channel: flat riverbed, sloping underwater banks, then a gentle bank up to the land
+  const bank = new Float32Array(S * S)
+  const water = new Uint8Array(S * S) // 1 = this corner is under water
+  const wlevel = new Float32Array(S * S).fill(NaN) // water surface height near the river, else NaN
+  for (let j = 0; j < S; j++) {
+    for (let i = 0; i < S; i++) {
+      const k = j * S + i
+      const m = nearM[k]
+      const d = dist[k]
+      const ww = wwOf(m)
+      const wb = 0.55 * ww
+      const dw = dwOf(m)
+      const bedY = surf[m] - dw
+      let T: number
+      if (d <= wb) T = bedY
+      else if (d <= ww) T = bedY + (dw * (d - wb)) / (ww - wb)
+      else T = surf[m] + 0.5 * (d - ww) + 1.6 * nDetail((i - H) * 0.07, (j - H) * 0.07) * smoothstep(3, 12, d - ww)
+      h[k] = smin(h[k], T, 0.9)
+      if (d <= ww + 2.5) wlevel[k] = surf[m]
+      bank[k] = 1 - smoothstep(ww + 0.2, ww + 3.2, d)
+      water[k] = wlevel[k] > h[k] ? 1 : 0
+    }
+  }
+
+  // ---- mountain landmarks: pack Mountain models crowning the highest ridge tops ----
+  const peaks: NonNullable<Terrain['peaks']> = []
+  const cands: { i: number; j: number; hh: number }[] = []
+  for (let j = 10; j < N - 10; j += 3) {
+    for (let i = 10; i < N - 10; i += 3) {
+      const hk = h[j * S + i]
+      if (hk < 19) continue
+      cands.push({ i, j, hh: hk })
+    }
+  }
+  cands.sort((a, b) => b.hh - a.hh)
+  for (const c of cands) {
+    if (peaks.length >= 14) break
+    const x = c.i - H
+    const z = c.j - H
+    if (Math.hypot(x - START.x, z - START.z) < 60) continue
+    if (dist[c.j * S + c.i] < 24) continue
+    if (peaks.some((p) => Math.hypot(p.x - x, p.z - z) < 20)) continue
+    const scale = 1.5 + 0.8 * hash2(c.i, c.j, seed + 90)
+    const yaw = hash2(c.i, c.j, seed + 91) * Math.PI * 2
+    const id = `Mountain_${1 + Math.floor(hash2(c.i, c.j, seed + 92) * 4)}`
+    // the base sits at the lowest ground under the footprint, so it never floats
+    const r = Math.ceil(2.2 * scale)
+    let lo = 1e9
+    for (let dj = -r; dj <= r; dj++) {
+      for (let di = -r; di <= r; di++) lo = Math.min(lo, h[(c.j + dj) * S + c.i + di])
+    }
+    peaks.push({ id, x, z, y: lo - 0.4, scale, yaw })
   }
 
   // a tile can be built on if it is flat enough and none of its corners are under the river
@@ -250,5 +332,5 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
 
   const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0
   console.log(`world generated: ${N}x${N} in ${ms.toFixed(0)} ms`)
-  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, river }
+  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, wlevel, peaks }
 }
