@@ -39,6 +39,8 @@ export interface Terrain {
   water?: Uint8Array
   /** Height of the river's water surface at each grid corner near the river (NaN = no water here). */
   wlevel?: Float32Array
+  /** Unit flow direction (x,z interleaved) of the river at each grid corner, for animating waves. */
+  flow?: Float32Array
   /** Pack mountain models that crown the highest ridges (display only, not gameplay objects). */
   peaks?: { id: string; x: number; z: number; y: number; scale: number; yaw: number }[]
 }

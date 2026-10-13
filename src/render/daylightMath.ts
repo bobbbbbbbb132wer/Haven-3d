@@ -38,7 +38,9 @@ export function lightingFor(f: number): Lighting {
   return {
     day,
     sky: mix(mix(SKY_NIGHT, SKY_DAY, day), SKY_DUSK, twilight * 0.55),
-    ambient: lerp(0.24, 0.65, day),
+    // a higher night floor keeps shadowed ground and water readable instead of going pure black,
+    // while the day side is capped a touch lower so the sun doesn't wash highlights out
+    ambient: lerp(0.32, 0.6, day),
     ambientColor: mix([0.55, 0.62, 0.95], [1, 1, 1], day),
     sunIntensity: 0.55 * smoothstep(0, 0.25, s),
     sunColor: mix([1, 0.96, 0.88], [1, 0.55, 0.3], twilight),

@@ -190,8 +190,11 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
     cx[m] = riverX(cz[m])
   }
   const tAt = (m: number) => m / (M - 1) // 0 at the river's start (north) .. 1 at its end (south)
-  const wwOf = (m: number) => 2.4 + 2.6 * tAt(m) // half-width of the water surface, metres
-  const dwOf = (m: number) => 0.9 + 0.7 * tAt(m) // water depth, metres
+  // Widened from the original 2.4-5.0 half-width: at the old scale the channel was only 2-5 grid
+  // cells across, so it rendered as a thin, broken ribbon of mostly-boundary quads. A wider bed
+  // with a bigger flat floor gives it a real body of fully-submerged interior cells to fill in.
+  const wwOf = (m: number) => 4.2 + 4 * tAt(m) // half-width of the water surface, metres
+  const dwOf = (m: number) => 1.1 + 0.9 * tAt(m) // water depth, metres
 
   // 1. nearest centre-line sample (and distance) for every grid corner
   const nearM = new Uint16Array(S * S)
@@ -269,23 +272,37 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
   const bank = new Float32Array(S * S)
   const water = new Uint8Array(S * S) // 1 = this corner is under water
   const wlevel = new Float32Array(S * S).fill(NaN) // water surface height near the river, else NaN
+  const flow = new Float32Array(S * S * 2) // unit (x,z) flow direction near the river, else (0,0)
   for (let j = 0; j < S; j++) {
     for (let i = 0; i < S; i++) {
       const k = j * S + i
       const m = nearM[k]
       const d = dist[k]
       const ww = wwOf(m)
-      const wb = 0.55 * ww
+      // a wide flat floor (65% of the half-width) gives the channel a real submerged body instead
+      // of being almost all sloping bank, which is what made it render as a thin ragged line
+      const wb = 0.65 * ww
       const dw = dwOf(m)
       const bedY = surf[m] - dw
       let T: number
       if (d <= wb) T = bedY
       else if (d <= ww) T = bedY + (dw * (d - wb)) / (ww - wb)
       else T = surf[m] + 0.5 * (d - ww) + 1.6 * nDetail((i - H) * 0.07, (j - H) * 0.07) * smoothstep(3, 12, d - ww)
-      h[k] = smin(h[k], T, 0.9)
+      // a tighter smin keeps the carved bed and banks close to their intended profile instead of
+      // being pulled back up toward the pre-carve ground, which used to leave the bed too shallow
+      h[k] = smin(h[k], T, 0.45)
       if (d <= ww + 2.5) wlevel[k] = surf[m]
       bank[k] = 1 - smoothstep(ww + 0.2, ww + 3.2, d)
       water[k] = wlevel[k] > h[k] ? 1 : 0
+
+      // downstream tangent of the nearest centre-line sample, for animating waves along the flow
+      const m0 = Math.max(0, m - SUB)
+      const m1 = Math.min(M - 1, m + SUB)
+      let fx = cx[m1] - cx[m0]
+      let fz = cz[m1] - cz[m0]
+      const flen = Math.hypot(fx, fz) || 1
+      flow[k * 2] = fx / flen
+      flow[k * 2 + 1] = fz / flen
     }
   }
 
@@ -332,5 +349,5 @@ export function generateWorld(seed: number, size: number = WORLD_SIZE): Terrain 
 
   const ms = (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0
   console.log(`world generated: ${N}x${N} in ${ms.toFixed(0)} ms`)
-  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, wlevel, peaks }
+  return { size: N, seed, heights: h, buildable, blocked: new Uint8Array(N * N), scenery: [], tint, bank, water, wlevel, flow, peaks }
 }

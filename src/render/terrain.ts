@@ -15,6 +15,7 @@ import type { Terrain } from '../sim/terrain'
 import type { EditBounds } from '../sim/terrainEdit'
 import { CHUNK, chunkCells, chunksPerSide, fillChunk } from './chunkData'
 import { buildWater } from './waterData'
+import { createWaterMaterial, WATER_FLOW_KIND } from './waterMaterial'
 import { loadModel } from './assetLoader'
 
 const chunks = new Map<string, Mesh>()
@@ -44,7 +45,7 @@ export function syncTerrainMesh(_scene: Scene, t: Terrain, b: EditBounds) {
   }
 }
 
-/** One continuous low-poly water surface that fills the lowered river channel. */
+/** One continuous low-poly water surface that fills the lowered river channel, with gentle waves. */
 function createWater(scene: Scene, t: Terrain) {
   const w = buildWater(t)
   if (!w) return
@@ -55,15 +56,11 @@ function createWater(scene: Scene, t: Terrain) {
   vd.colors = w.col
   vd.indices = Uint32Array.from({ length: w.pos.length / 3 }, (_, i) => i) // un-shared = flat shading
   vd.applyToMesh(mesh)
+  mesh.setVerticesData(WATER_FLOW_KIND, w.flow, false, 2)
   mesh.hasVertexAlpha = true // clearer in the shallows, so the riverbed shows through
-  const mat = new StandardMaterial('waterMat', scene)
-  mat.specularColor = new Color3(0.35, 0.35, 0.35)
-  mat.specularPower = 64
-  mat.backFaceCulling = false
-  mat.freeze()
-  mesh.material = mat
+  mesh.material = createWaterMaterial(scene)
   mesh.isPickable = false
-  mesh.freezeWorldMatrix()
+  // not frozen: the vertex shader animates position every frame
 }
 
 /** The pack's Mountain models, cloned onto the ridge crowns chosen by the world generator. */
